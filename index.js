@@ -1,4 +1,7 @@
 
+const puncStart = new Set(" ,.'\"（《【“‘「『");
+const puncEnd = new Set(" ,.'\"）》】”’」』");
+
 /**
  * 忽略一切CommonMark规范，让marked能正确加粗下面示例中的字符串，它们经常出现在中文LLM的回复中
  * - 这就是**“我得到吨”**与商业**“比比拉布”**的典型差异。
@@ -9,28 +12,69 @@ export function markedBetterChinesePunc(options) {
 	return {extensions: [{
 			name: 'betterChinesePunc',
 			level: 'inline',
-			start(src) {  return src.match(/([*_])\1?/)?.index; },
+			start(src) { return src.match(/([*_])\1?/)?.index; },
 			tokenizer(src, tokens) {
-				const rule = /^(([*_])\2?)([^*]+)\1/;
-				const match = rule.exec(src);
-				if (match) {
-					const token = {
-						type: match[1].length === 1 ? "em" : "strong",
-						raw: match[0],
-						text: match[3].trim(),
+				let part, index = 0;
+
+				let validStart = puncStart.has(src[index]);
+				if (validStart) index++; // always true because regexp
+				else if (index === 0) validStart = true;
+
+				part = src[index];
+				if (part !== "*" && part !== "_") return;
+				//if (part === "_" && !validStart) return;
+
+				const modeChar = part;
+				let symCount = 0;
+				while (src[index] === part) {
+					symCount++;
+					index++;
+				}
+
+				let validStart2 = puncStart.has(src[index]);
+
+				function skip() {
+					return {
+						skip: true,
+						type: ["betterChinesePunc"],
+						raw: src.substring(0, index),
 						tokens: []
 					};
-					this.lexer.inline(token.text, token.tokens);
-					return token;
 				}
+
+				let contentStart = index;
+				while ((src[index] ?? modeChar) !== modeChar) index++;
+				let contentEnd = index;
+
+				for (let i = 0; i < symCount; i++) {
+					if (src[index + i] !== modeChar) return skip();
+				}
+				index += symCount;
+
+				const validEnd = puncEnd.has(src[contentEnd-1]) || puncEnd.has(src[index]);
+				if (part === "_"
+					? !(validStart || validStart2) || (!validEnd || !src[index])
+					: !validStart && !validStart2 && !validEnd && src[index]
+				)
+					return skip();
+
+				if (symCount > 2) symCount = symCount & 1 ? 0 : 2;
+				const token = {
+					type: ["betterChinesePunc", "em", "strong"][symCount],
+					raw: src.substring(0, index),
+					text: src.substring(contentStart, contentEnd),
+					tokens: []
+				};
+				this.lexer.inline(token.text, token.tokens);
+				return token;
 			},
 			renderer(token) {
-				const x = token.type;
-				return `<${x}>${this.parser.parseInline(token.tokens)}</${x}>`;
+				if (token.skip) return token.raw;
+				if (!token.text) return "";
+				return `<strong><em>${this.parser.parseInline(token.tokens)}</em></strong>`;
 			}
 		}]};
 }
-
 
 const possibleStart = /[\s\p{P}]/u;
 const latexRule =  /^(\${1,2})\n?((?:\\.|[^\\\n])*?(?:\\.|[^\\\n$]))\n?\1(?=[\s\p{P}]|$)/u;
